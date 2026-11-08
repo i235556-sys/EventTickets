@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EventTickets dApp</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <header>
+    <img src="https://upload.wikimedia.org/wikipedia/commons/0/05/Ethereum_logo_2014.svg" alt="Ethereum logo" class="logo">
+    <div>
+      <h1>EventTickets</h1>
+      <p class="sub">Book your seat on the blockchain (Sepolia testnet)</p>
+    </div>
+    <button id="connectBtn">Connect MetaMask</button>
+  </header>
+
+  <main>
+
+    <section class="card event">
+      <h2 id="eventName">Loading event...</h2>
+      <ul class="details">
+        <li>📍 Venue: <span id="venue">connect wallet to load</span></li>
+        <li>📅 Date: <span id="eventDate">connect wallet to load</span></li>
+        <li>💰 Price: <span id="price">0.001</span> SepoliaETH</li>
+        <li>🎟️ Seats left: <span id="seatsLeft">?</span> of <span id="totalSeats">?</span></li>
+      </ul>
+      <div class="bar"><div id="barFill"></div></div>
+      <button id="buyBtn" disabled>Buy ticket</button>
+    </section>
+
+    <section class="card">
+      <h2>My ticket</h2>
+      <div id="myTicket">
+        <p>Connect your wallet to see if you have a ticket.</p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Wallet</h2>
+      <ul class="info">
+        <li>Account: <span id="account">not connected</span></li>
+        <li>Network: <span id="network">none</span></li>
+        <li>Balance: <span id="balance">0</span> SepoliaETH</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>Transaction status</h2>
+      <p id="status">Nothing yet.</p>
+      <p id="txLink"></p>
+    </section>
+
+    <section class="card">
+      <div class="row">
+        <h2>Attendees (<span id="soldCount">0</span>)</h2>
+        <button id="refreshBtn" class="small" disabled>Refresh</button>
+      </div>
+      <ol id="attendeeList"></ol>
+    </section>
+
+    <section class="card" id="ownerPanel" hidden>
+      <h2>Organiser panel</h2>
+      <p>Money collected in the contract: <b><span id="contractBal">0</span> SepoliaETH</b></p>
+      <button id="withdrawBtn">Withdraw funds</button>
+    </section>
+
+    <section class="card">
+      <h2>About this dApp</h2>
+      <p>The ticket sale is handled by a smart contract, so there is no middleman and every booking can be checked on Etherscan.</p>
+      <h3>Contract functions</h3>
+      <ul>
+        <li><b>buyTicket</b> (write, payable) books a seat for the exact ticket price</li>
+        <li><b>withdrawFunds</b> (write) lets only the organiser take out the money</li>
+        <li><b>getEventDetails</b> (read) returns name, venue, date, price and seats</li>
+        <li><b>getTicket</b> (read) returns the seat number of a wallet</li>
+        <li><b>getAttendees</b> (read) returns all wallets that booked</li>
+      </ul>
+      <p>Contract: <a id="contractLink" href="#" target="_blank">CONTRACT_ADDRESS</a></p>
+      <p>Links:
+        <a href="https://sepolia.etherscan.io" target="_blank">Sepolia Etherscan</a> |
+        <a href="https://remix.ethereum.org" target="_blank">Remix IDE</a> |
+        <a href="https://metamask.io" target="_blank">MetaMask</a>
+      </p>
+    </section>
+
+  </main>
+
+  <footer>
+    <p>Okasha Saeed (23i-5556) | MG3012 Blockchain Technology for Business | Assignment 2</p>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
+  <script>
+    // paste the address from Remix after deploying
+    const CONTRACT_ADDRESS = "0x0C801b6FdD5124A49A27B8D83134e13b567ee06b";
+    const SEPOLIA_ID = 11155111n;
+
+    const ABI = [
+      "function buyTicket() payable",
+      "function withdrawFunds()",
+      "function getEventDetails() view returns (string, string, string, uint, uint, uint)",
+      "function getTicket(address _user) view returns (uint)",
+      "function getAttendees() view returns (address[])",
+      "function owner() view returns (address)",
+      "event TicketBought(address indexed buyer, uint seatNo, uint amountPaid)"
+    ];
+
+    let provider, signer, contract, myAddress, price;
+
+    const $ = (id) => document.getElementById(id);
+
+    $("contractLink").textContent = CONTRACT_ADDRESS;
+    $("contractLink").href = "https://sepolia.etherscan.io/address/" + CONTRACT_ADDRESS;
+
+    function short(addr) {
+      return addr.slice(0, 6) + "..." + addr.slice(-4);
+    }
+
+    function setStatus(msg, type) {
+      $("status").textContent = msg;
+      $("status").className = type || "";
+    }
+
+    function showTx(hash) {
+      $("txLink").innerHTML = 'Tx hash: <a href="https://sepolia.etherscan.io/tx/' + hash +
+        '" target="_blank">' + short(hash) + '</a> (open on Etherscan)';
+    }
+
+    async function connectWallet() {
+      if (!window.ethereum) {
+        setStatus("MetaMask not found. Please install it first.", "error");
+        return;
+      }
+      try {
+        provider = new ethers.BrowserProvider(window.ethereum);
+        await provider.send("eth_requestAccounts", []);
+
+        let net = await provider.getNetwork();
+        if (net.chainId !== SEPOLIA_ID) {
+          setStatus("Switching to Sepolia...");
+          await window.ethereum.request({
+            method: "wallet_switchEthereumChain",
+            params: [{ chainId: "0xaa36a7" }]
+          });
+          provider = new ethers.BrowserProvider(window.ethereum);
+          net = await provider.getNetwork();
+        }
+
+        signer = await provider.getSigner();
+        myAddress = await signer.getAddress();
+        contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
+
+        $("account").textContent = short(myAddress);
+        $("network").textContent = net.chainId === SEPOLIA_ID ? "Sepolia" : "chain " + net.chainId;
+        $("connectBtn").textContent = short(myAddress);
+        $("connectBtn").disabled = true;
+        $("refreshBtn").disabled = false;
+
+        setStatus("Wallet connected.", "ok");
+        await loadAll();
+      } catch (err) {
+        console.log(err);
+        setStatus("Could not connect: " + (err.shortMessage || err.message), "error");
+      }
+    }
+
+    async function loadAll() {
+      const [name, venue, date, p, sold, total] = await contract.getEventDetails();
+      price = p;
+      const left = Number(total) - Number(sold);
+
+      $("eventName").textContent = name;
+      $("venue").textContent = venue;
+      $("eventDate").textContent = date;
+      $("price").textContent = ethers.formatEther(p);
+      $("seatsLeft").textContent = left;
+      $("totalSeats").textContent = total;
+      $("barFill").style.width = (Number(sold) / Number(total) * 100) + "%";
+
+      const bal = await provider.getBalance(myAddress);
+      $("balance").textContent = Number(ethers.formatEther(bal)).toFixed(4);
+
+      // my ticket
+      const seat = Number(await contract.getTicket(myAddress));
+      if (seat > 0) {
+        $("myTicket").innerHTML =
+          '<div class="ticket">' +
+            '<div><p class="tLabel">ADMIT ONE</p><h3></h3><p class="tSmall"></p></div>' +
+            '<div class="seat"><p class="tLabel">SEAT</p><p class="seatNo">' + seat + '</p></div>' +
+          '</div>';
+        $("myTicket").querySelector("h3").textContent = name;
+        $("myTicket").querySelector(".tSmall").textContent = date + " | " + short(myAddress);
+        $("buyBtn").disabled = true;
+        $("buyBtn").textContent = "You already have a ticket";
+      } else if (left === 0) {
+        $("myTicket").innerHTML = "<p>You don't have a ticket and the event is sold out.</p>";
+        $("buyBtn").disabled = true;
+        $("buyBtn").textContent = "Sold out";
+      } else {
+        $("myTicket").innerHTML = "<p>No ticket yet. Click <b>Buy ticket</b> above to book a seat.</p>";
+        $("buyBtn").disabled = false;
+        $("buyBtn").textContent = "Buy ticket for " + ethers.formatEther(p) + " ETH";
+      }
+
+      // attendees
+      const people = await contract.getAttendees();
+      $("soldCount").textContent = people.length;
+      const list = $("attendeeList");
+      list.innerHTML = "";
+      if (people.length === 0) {
+        list.innerHTML = "<p class='empty'>No bookings yet.</p>";
+      }
+      people.forEach((a) => {
+        const li = document.createElement("li");
+        li.textContent = short(a) + (a.toLowerCase() === myAddress.toLowerCase() ? "  (you)" : "");
+        list.appendChild(li);
+      });
+
+      // organiser panel only for the deployer
+      const owner = await contract.owner();
+      if (owner.toLowerCase() === myAddress.toLowerCase()) {
+        $("ownerPanel").hidden = false;
+        const cBal = await provider.getBalance(CONTRACT_ADDRESS);
+        $("contractBal").textContent = ethers.formatEther(cBal);
+      }
+    }
+
+    async function buyTicket() {
+      try {
+        $("buyBtn").disabled = true;
+        setStatus("Confirm the payment in MetaMask...");
+        const tx = await contract.buyTicket({ value: price });
+        showTx(tx.hash);
+        setStatus("Transaction sent, waiting for confirmation...");
+        const receipt = await tx.wait();
+        setStatus("Ticket booked! Confirmed in block " + receipt.blockNumber + ", gas used " + receipt.gasUsed, "ok");
+        await loadAll();
+      } catch (err) {
+        console.log(err);
+        setStatus("Failed: " + (err.reason || err.shortMessage || err.message), "error");
+        $("buyBtn").disabled = false;
+      }
+    }
+
+    async function withdraw() {
+      try {
+        setStatus("Confirm the withdrawal in MetaMask...");
+        const tx = await contract.withdrawFunds();
+        showTx(tx.hash);
+        const receipt = await tx.wait();
+        setStatus("Funds withdrawn in block " + receipt.blockNumber, "ok");
+        await loadAll();
+      } catch (err) {
+        console.log(err);
+        setStatus("Failed: " + (err.reason || err.shortMessage || err.message), "error");
+      }
+    }
+
+    $("connectBtn").onclick = connectWallet;
+    $("buyBtn").onclick = buyTicket;
+    $("withdrawBtn").onclick = withdraw;
+    $("refreshBtn").onclick = loadAll;
+
+    // reload if account or network changes in MetaMask
+    if (window.ethereum) {
+      window.ethereum.on("accountsChanged", () => location.reload());
+      window.ethereum.on("chainChanged", () => location.reload());
+    }
+  </script>
+</body>
+</html>
